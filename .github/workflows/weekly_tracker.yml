@@ -18,50 +18,28 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      # ── Checkout ─────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Python Setup ─────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: scraper/requirements.txt
 
       - name: Install Python dependencies
-      run: |
-        pip install --upgrade pip
-        pip install requests beautifulsoup4 lxml pdfplumber anthropic python-dotenv
+        run: |
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml pdfplumber anthropic python-dotenv
 
-      # ── Node Setup (for frontend build) ──────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install Node dependencies
-        run: |
-          cd frontend
-          npm ci
-
-      # ── Restore persistent data ───────────────────────────────────────
-      - name: Restore database cache
-        uses: actions/cache@v4
-        with:
-          path: data/tracker.db
-          key: tracker-db-${{ github.run_number }}
-          restore-keys: |
-            tracker-db-
 
       - name: Create required directories
         run: |
           mkdir -p data logs frontend/public
 
-      # ── Run Scraper ───────────────────────────────────────────────────
       - name: Run legislative bill scraper
         env:
           LEGISCAN_API_KEY: ${{ secrets.LEGISCAN_API_KEY }}
@@ -70,7 +48,6 @@ jobs:
         run: |
           python scraper/scrape_bills.py
 
-      # ── Send Email Digest ─────────────────────────────────────────────
       - name: Send weekly email digest
         if: ${{ github.event.inputs.send_digest != 'false' }}
         env:
@@ -83,13 +60,6 @@ jobs:
         run: |
           python scraper/send_digest.py
 
-      # ── Build Frontend ────────────────────────────────────────────────
-      - name: Build static frontend
-        run: |
-          cd frontend
-          npm run build
-
-      # ── Deploy to GitHub Pages ────────────────────────────────────────
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -126,8 +96,8 @@ jobs:
           python -c "
           import smtplib, os
           from email.mime.text import MIMEText
-          msg = MIMEText('The weekly Vet Legislative Tracker pipeline failed. Check GitHub Actions for details.')
-          msg['Subject'] = '[Vet Tracker] ⚠️ Weekly Pipeline FAILED'
+          msg = MIMEText('The weekly Vet Legislative Tracker pipeline failed.')
+          msg['Subject'] = '[Vet Tracker] Weekly Pipeline FAILED'
           msg['From'] = os.environ['SMTP_USER']
           msg['To'] = os.environ['DIGEST_RECIPIENTS']
           with smtplib.SMTP('smtp.gmail.com', 587) as s:
