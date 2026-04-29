@@ -1,0 +1,140 @@
+name: Weekly Veterinary Legislative Tracker
+
+on:
+  # Run every Sunday at 11 PM UTC
+  schedule:
+    - cron: "0 23 * * 0"
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      send_digest:
+        description: "Send email digest after run?"
+        required: false
+        default: "true"
+        type: boolean
+
+jobs:
+  scrape-and-build:
+    name: Run Tracker Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Python Setup ─────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: scraper/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r scraper/requirements.txt
+
+      # ── Node Setup (for frontend build) ──────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      # ── Restore persistent data ───────────────────────────────────────
+      - name: Restore database cache
+        uses: actions/cache@v4
+        with:
+          path: data/tracker.db
+          key: tracker-db-${{ github.run_number }}
+          restore-keys: |
+            tracker-db-
+
+      - name: Create required directories
+        run: |
+          mkdir -p data logs frontend/public
+
+      # ── Run Scraper ───────────────────────────────────────────────────
+      - name: Run legislative bill scraper
+        env:
+          LEGISCAN_API_KEY: ${{ secrets.LEGISCAN_API_KEY }}
+          OPENSTATES_API_KEY: ${{ secrets.OPENSTATES_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python scraper/scrape_bills.py
+
+      # ── Send Email Digest ─────────────────────────────────────────────
+      - name: Send weekly email digest
+        if: ${{ github.event.inputs.send_digest != 'false' }}
+        env:
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+          TRACKER_URL: ${{ vars.TRACKER_URL }}
+        run: |
+          python scraper/send_digest.py
+
+      # ── Build Frontend ────────────────────────────────────────────────
+      - name: Build static frontend
+        run: |
+          cd frontend
+          npm run build
+
+      # ── Deploy to GitHub Pages ────────────────────────────────────────
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: scrape-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  notify-failure:
+    name: Notify on Failure
+    needs: [scrape-and-build, deploy]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure notification
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+        run: |
+          python -c "
+          import smtplib, os
+          from email.mime.text import MIMEText
+          msg = MIMEText('The weekly Vet Legislative Tracker pipeline failed. Check GitHub Actions for details.')
+          msg['Subject'] = '[Vet Tracker] ⚠️ Weekly Pipeline FAILED'
+          msg['From'] = os.environ['SMTP_USER']
+          msg['To'] = os.environ['DIGEST_RECIPIENTS']
+          with smtplib.SMTP('smtp.gmail.com', 587) as s:
+              s.starttls()
+              s.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
+              s.sendmail(msg['From'], msg['To'].split(','), msg.as_string())
+          " || echo 'Could not send failure notification'
