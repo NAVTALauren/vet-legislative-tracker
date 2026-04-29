@@ -1,12 +1,8 @@
 name: Weekly Veterinary Legislative Tracker
 
 on:
-  # Run every Sunday at 11 PM UTC
   schedule:
     - cron: "0 23 * * 0"
-    workflow_dispatch:
-
-  # Allow manual trigger from GitHub UI
   workflow_dispatch:
     inputs:
       send_digest:
