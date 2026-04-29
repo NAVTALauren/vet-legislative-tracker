@@ -34,15 +34,15 @@ jobs:
           cache-dependency-path: scraper/requirements.txt
 
       - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r scraper/requirements.txt
+      run: |
+        pip install --upgrade pip
+        pip install requests beautifulsoup4 lxml pdfplumber anthropic python-dotenv
 
       # ── Node Setup (for frontend build) ──────────────────────────────
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
