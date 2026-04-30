@@ -42,7 +42,7 @@ jobs:
 
       - name: Create required directories
         run: |
-          mkdir -p data logs frontend/public
+          mkdir -p data logs frontend
 
       - name: Run legislative bill scraper
         env:
@@ -51,11 +51,16 @@ jobs:
         run: |
           python scraper/scrape_bills.py
 
+      - name: Verify tracker_data.json was created
+        run: |
+          ls -la frontend/tracker_data.json
+          echo "File size: $(wc -c < frontend/tracker_data.json) bytes"
+
       - name: Commit tracker data to repo
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add frontend/tracker_data.json || true
+          git add frontend/tracker_data.json
           git diff --staged --quiet || git commit -m "Update tracker_data.json [skip ci]"
           git push || true
 
