@@ -43,51 +43,9 @@ jobs:
       - name: Run legislative bill scraper
         env:
           LEGISCAN_API_KEY: ${{ secrets.LEGISCAN_API_KEY }}
-          OPENSTATES_API_KEY: ${{ secrets.OPENSTATES_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python scraper/scrape_bills.py
-
-- name: Copy tracker data to frontend
-        run: |
-          cp data/tracker.db . || true
-          python -c "
-import sqlite3, json
-from datetime import datetime
-from pathlib import Path
-
-DB = Path('data/tracker.db')
-if not DB.exists():
-    print('No DB found, using existing tracker_data.json')
-    exit(0)
-
-conn = sqlite3.connect(DB)
-conn.row_factory = sqlite3.Row
-
-bills = [dict(r) for r in conn.execute('SELECT * FROM bills ORDER BY last_updated DESC')]
-minutes = [dict(r) for r in conn.execute('SELECT * FROM board_minutes ORDER BY last_updated DESC')]
-
-for b in bills:
-    try: b['categories'] = json.loads(b['categories'] or '[]')
-    except: b['categories'] = []
-for m in minutes:
-    try: m['categories'] = json.loads(m['categories'] or '[]')
-    except: m['categories'] = []
-
-output = {
-    'last_updated': datetime.utcnow().isoformat(),
-    'total_bills': len(bills),
-    'total_minutes': len(minutes),
-    'bills': bills,
-    'board_minutes': minutes,
-}
-
-Path('frontend/public').mkdir(parents=True, exist_ok=True)
-with open('frontend/public/tracker_data.json', 'w') as f:
-    json.dump(output, f, indent=2, default=str)
-
-print(f'Wrote tracker_data.json: {len(bills)} bills, {len(minutes)} minutes')
-"
 
       - name: Send weekly email digest
         if: ${{ github.event.inputs.send_digest != 'false' }}
@@ -130,6 +88,7 @@ print(f'Wrote tracker_data.json: {len(bills)} bills, {len(minutes)} minutes')
     runs-on: ubuntu-latest
     steps:
       - name: Send failure notification
+        continue-on-error: true
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
