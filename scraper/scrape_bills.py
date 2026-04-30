@@ -29,7 +29,7 @@ OUTPUT_PATH = BASE_DIR / "frontend" / "tracker_data.json"
 # Create dirs up front
 (BASE_DIR / "data").mkdir(parents=True, exist_ok=True)
 (BASE_DIR / "logs").mkdir(parents=True, exist_ok=True)
-OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+(BASE_DIR / "frontend").mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -529,14 +529,13 @@ class TrackerPipeline:
 
         with open(OUTPUT_PATH, "w") as f:
             json.dump(output, f, indent=2, default=str)
-        log.info(
-            "Exported tracker_data.json — %d bills, %d minutes",
-            len(bills), len(minutes)
-        )
+
+        log.info("Exported %s — %d bills, %d minutes", OUTPUT_PATH, len(bills), len(minutes))
 
     def run(self):
         start = time.time()
         log.info("=== Tracker pipeline v2 started ===")
+        log.info("Output path: %s", OUTPUT_PATH)
         total_bills = total_bills_new = total_min = total_min_new = 0
 
         for state_cfg in self.cfg["states"]:
@@ -564,6 +563,12 @@ class TrackerPipeline:
             time.sleep(1)
 
         self.export_json()
+
+        # Confirm file was written
+        if OUTPUT_PATH.exists():
+            log.info("Confirmed: %s exists (%d bytes)", OUTPUT_PATH, OUTPUT_PATH.stat().st_size)
+        else:
+            log.error("ERROR: %s was NOT written!", OUTPUT_PATH)
 
         duration = time.time() - start
         self.db.execute("""
