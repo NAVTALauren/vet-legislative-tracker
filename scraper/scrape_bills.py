@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# ─── Config ────────────────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────────────────────────────
 
 LEGISCAN_API_KEY  = os.environ.get("LEGISCAN_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -26,6 +26,7 @@ CONFIG_PATH = BASE_DIR / "config" / "state_boards.json"
 DB_PATH     = BASE_DIR / "data" / "tracker.db"
 OUTPUT_PATH = BASE_DIR / "frontend" / "public" / "tracker_data.json"
 
+# Create dirs up front
 (BASE_DIR / "data").mkdir(parents=True, exist_ok=True)
 (BASE_DIR / "logs").mkdir(parents=True, exist_ok=True)
 OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -75,12 +76,13 @@ def init_db() -> sqlite3.Connection:
             id TEXT PRIMARY KEY, state TEXT NOT NULL, abbreviation TEXT NOT NULL,
             board_name TEXT, meeting_date TEXT, source_url TEXT, excerpt_raw TEXT,
             summary_ai TEXT, categories TEXT, relevance_score INTEGER,
-            regulatory_type TEXT, first_seen_date TEXT, last_updated TEXT, content_hash TEXT
+            regulatory_type TEXT, first_seen_date TEXT, last_updated TEXT,
+            content_hash TEXT
         );
         CREATE TABLE IF NOT EXISTS run_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, run_date TEXT, bills_found INTEGER,
-            minutes_found INTEGER, bills_new INTEGER, minutes_new INTEGER,
-            duration_seconds REAL, status TEXT
+            id INTEGER PRIMARY KEY AUTOINCREMENT, run_date TEXT,
+            bills_found INTEGER, minutes_found INTEGER, bills_new INTEGER,
+            minutes_new INTEGER, duration_seconds REAL, status TEXT
         );
     """)
     conn.commit()
@@ -146,7 +148,10 @@ class ClaudeClient:
         })
 
     def analyze(self, text: str, item_type: str = "bill") -> dict:
-        EMPTY = {"relevant": False, "summary": "", "categories": [], "relevance_score": 0, "regulatory_type": ""}
+        EMPTY = {
+            "relevant": False, "summary": "", "categories": [],
+            "relevance_score": 0, "regulatory_type": ""
+        }
         if not self.key:
             log.warning("No Anthropic API key — skipping AI analysis")
             return EMPTY
@@ -164,7 +169,7 @@ Workforce categories:
 5. Veterinary Technician Specialists (VTS)
 6. Veterinary Professional Associates (VPA)
 
-If relevant respond ONLY with this JSON (no markdown):
+If relevant respond ONLY with this JSON (no markdown, no extra text):
 {{"relevant":true,"summary":"2-3 sentence plain-language summary","categories":["matching categories"],"relevance_score":8,"regulatory_type":"scope of practice"}}
 
 Valid regulatory_type values: scope of practice, title protection, licensure, supervision ratio, continuing education, examination, reciprocity, discipline, delegation, other
@@ -176,11 +181,16 @@ If NOT relevant respond ONLY with:
             try:
                 r = self.s.post(
                     self.URL,
-                    json={"model": self.MODEL, "max_tokens": 400, "messages": [{"role": "user", "content": prompt}]},
+                    json={
+                        "model": self.MODEL,
+                        "max_tokens": 400,
+                        "messages": [{"role": "user", "content": prompt}]
+                    },
                     timeout=60,
                 )
                 r.raise_for_status()
-                raw = r.json()["content"][0]["text"].strip().replace("```json","").replace("```","").strip()
+                raw = r.json()["content"][0]["text"].strip()
+                raw = raw.replace("```json", "").replace("```", "").strip()
                 return json.loads(raw)
             except json.JSONDecodeError:
                 log.warning("Claude returned non-JSON on attempt %d", attempt + 1)
@@ -201,7 +211,11 @@ If NOT relevant respond ONLY with:
 
 class MinutesFetcher:
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     }
@@ -215,10 +229,13 @@ class MinutesFetcher:
         try:
             results = self._scrape_minutes_page(state_cfg["vmb_minutes_url"])
         except Exception as e:
-            log.warning("%s direct scrape failed (%s) — trying Google fallback", state_cfg["state"], e)
+            log.warning(
+                "%s direct scrape failed (%s) — trying DuckDuckGo fallback",
+                state_cfg["state"], e
+            )
 
         if not results:
-            results = self._google_fallback(state_cfg)
+            results = self._ddg_fallback(state_cfg)
 
         return results[:4]
 
@@ -236,44 +253,62 @@ class MinutesFetcher:
         for a in soup.find_all("a", href=True):
             href  = a["href"].strip()
             label = a.get_text(" ", strip=True).lower()
-            if not any(kw in label or kw in href.lower() for kw in ["minute", "agenda", "meeting", ".pdf"]):
+            is_doc = any(
+                kw in label or kw in href.lower()
+                for kw in ["minute", "agenda", "meeting", ".pdf"]
+            )
+            if not is_doc:
                 continue
             full_url = href if href.startswith("http") else self._resolve(url, href)
             text = self._fetch_text(full_url)
             if text and self._has_keyword(text):
-                results.append({"url": full_url, "meeting_date": self._extract_date(label), "raw_text": text[:4000]})
+                results.append({
+                    "url": full_url,
+                    "meeting_date": self._extract_date(label),
+                    "raw_text": text[:4000],
+                })
             if len(results) >= 4:
                 break
 
         return results
 
-    def _google_fallback(self, state_cfg: dict) -> list:
+    def _ddg_fallback(self, state_cfg: dict) -> list:
+        """Use DuckDuckGo HTML search as fallback — no API key, no rate limiting."""
         state  = state_cfg["state"]
         domain = self._domain(state_cfg["vmb_url"])
-        query  = (f'site:{domain} "minutes" ("veterinary technician" OR "vet tech" OR '
-                  f'"veterinary nurse" OR "veterinary assistant" OR "VPA" OR "VTS")')
+        query  = (
+            f'site:{domain} minutes '
+            f'"veterinary technician" OR "vet tech" OR "veterinary nurse" '
+            f'OR "veterinary assistant" OR "VPA" OR "VTS"'
+        )
         try:
             resp = self.s.get(
-                f"https://www.google.com/search?q={requests.utils.quote(query)}&num=5",
-                timeout=15
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                timeout=15,
             )
             resp.raise_for_status()
         except Exception as e:
-            log.warning("Google fallback failed for %s: %s", state, e)
+            log.warning("DuckDuckGo fallback failed for %s: %s", state, e)
             return []
 
         from bs4 import BeautifulSoup
         soup    = BeautifulSoup(resp.text, "html.parser")
         results = []
 
-        for a in soup.select("a[href]"):
-            href = a["href"]
-            if "/url?q=" in href:
-                href = href.split("/url?q=")[1].split("&")[0]
-            if href.startswith("http") and domain in href:
-                text = self._fetch_text(href)
-                if text and self._has_keyword(text):
-                    results.append({"url": href, "meeting_date": "", "raw_text": text[:4000]})
+        for a in soup.select("a.result__url, a.result__a"):
+            href = a.get("href", "")
+            if not href.startswith("http"):
+                continue
+            if domain not in href:
+                continue
+            text = self._fetch_text(href)
+            if text and self._has_keyword(text):
+                results.append({
+                    "url": href,
+                    "meeting_date": "",
+                    "raw_text": text[:4000],
+                })
             if len(results) >= 4:
                 break
 
@@ -294,7 +329,8 @@ class MinutesFetcher:
 
     def _pdf_text(self, content: bytes) -> str:
         try:
-            import io, pdfplumber
+            import io
+            import pdfplumber
             with pdfplumber.open(io.BytesIO(content)) as pdf:
                 return "\n".join(p.extract_text() or "" for p in pdf.pages[:8])
         except Exception as e:
@@ -308,9 +344,11 @@ class MinutesFetcher:
     def _extract_date(self, text: str) -> str:
         import re
         m = re.search(
-            r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|(?:january|february|march|april|may|june|"
-            r"july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4})\b",
-            text, re.IGNORECASE)
+            r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
+            r"(?:january|february|march|april|may|june|july|august|"
+            r"september|october|november|december)\s+\d{1,2},?\s+\d{4})\b",
+            text, re.IGNORECASE,
+        )
         return m.group(0) if m else ""
 
     def _resolve(self, base: str, href: str) -> str:
@@ -360,7 +398,8 @@ class TrackerPipeline:
                 h            = chash(analyze_text)
 
                 existing = self.db.execute(
-                    "SELECT content_hash, first_seen_date FROM bills WHERE legiscan_id=?", (bill_id,)
+                    "SELECT content_hash, first_seen_date FROM bills WHERE legiscan_id=?",
+                    (bill_id,)
                 ).fetchone()
 
                 if existing and existing["content_hash"] == h:
@@ -370,32 +409,38 @@ class TrackerPipeline:
                 if not ai.get("relevant"):
                     continue
 
-                found += 1
-                is_new = not existing
+                found  += 1
+                is_new  = not existing
                 if is_new:
                     new += 1
 
                 sponsor     = (bill.get("sponsors") or [{}])[0].get("name", "")
                 texts       = bill.get("texts") or []
-                url         = (texts[0].get("state_link") or state_cfg["bill_search_url"]) if texts else state_cfg["bill_search_url"]
+                url         = (
+                    texts[0].get("state_link") or state_cfg["bill_search_url"]
+                ) if texts else state_cfg["bill_search_url"]
                 history     = bill.get("history") or []
                 last_action = history[-1].get("action", "") if history else ""
                 row_id      = f"{abbr}-{bill.get('bill_number', bill_id)}"
-                first_seen  = existing["first_seen_date"] if existing else datetime.utcnow().isoformat()
+                first_seen  = (
+                    existing["first_seen_date"] if existing
+                    else datetime.utcnow().isoformat()
+                )
 
                 self.db.execute("""
                     INSERT OR REPLACE INTO bills
-                    (id,state,abbreviation,chamber,bill_number,title,status,status_date,
-                     sponsor,last_action,last_action_date,summary_ai,categories,relevance_score,
-                     regulatory_type,full_text_url,legiscan_id,first_seen_date,last_updated,content_hash)
+                    (id,state,abbreviation,chamber,bill_number,title,status,
+                     status_date,sponsor,last_action,last_action_date,summary_ai,
+                     categories,relevance_score,regulatory_type,full_text_url,
+                     legiscan_id,first_seen_date,last_updated,content_hash)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     row_id, state, abbr,
-                    bill.get("chamber",""), bill.get("bill_number",""), title,
-                    bill.get("status",""), bill.get("status_date",""), sponsor,
-                    last_action, bill.get("last_action_date",""),
-                    ai.get("summary",""), json.dumps(ai.get("categories",[])),
-                    ai.get("relevance_score",0), ai.get("regulatory_type",""),
+                    bill.get("chamber", ""), bill.get("bill_number", ""), title,
+                    bill.get("status", ""), bill.get("status_date", ""), sponsor,
+                    last_action, bill.get("last_action_date", ""),
+                    ai.get("summary", ""), json.dumps(ai.get("categories", [])),
+                    ai.get("relevance_score", 0), ai.get("regulatory_type", ""),
                     url, bill_id, first_seen, datetime.utcnow().isoformat(), h,
                 ))
 
@@ -418,7 +463,8 @@ class TrackerPipeline:
             h        = chash(url + raw_text[:200])
 
             existing = self.db.execute(
-                "SELECT content_hash, first_seen_date FROM board_minutes WHERE source_url=?", (url,)
+                "SELECT content_hash, first_seen_date FROM board_minutes WHERE source_url=?",
+                (url,)
             ).fetchone()
 
             if existing and existing["content_hash"] == h:
@@ -428,34 +474,42 @@ class TrackerPipeline:
             if not ai.get("relevant"):
                 continue
 
-            found += 1
-            is_new = not existing
+            found  += 1
+            is_new  = not existing
             if is_new:
                 new += 1
 
             row_id     = f"{abbr}-minutes-{h}"
-            first_seen = existing["first_seen_date"] if existing else datetime.utcnow().isoformat()
+            first_seen = (
+                existing["first_seen_date"] if existing
+                else datetime.utcnow().isoformat()
+            )
 
             self.db.execute("""
                 INSERT OR REPLACE INTO board_minutes
-                (id,state,abbreviation,board_name,meeting_date,source_url,excerpt_raw,
-                 summary_ai,categories,relevance_score,regulatory_type,
+                (id,state,abbreviation,board_name,meeting_date,source_url,
+                 excerpt_raw,summary_ai,categories,relevance_score,regulatory_type,
                  first_seen_date,last_updated,content_hash)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 row_id, state, abbr,
-                state_cfg["vmb_name"], item.get("meeting_date",""), url,
-                raw_text[:1000], ai.get("summary",""),
-                json.dumps(ai.get("categories",[])), ai.get("relevance_score",0),
-                ai.get("regulatory_type",""), first_seen, datetime.utcnow().isoformat(), h,
+                state_cfg["vmb_name"], item.get("meeting_date", ""), url,
+                raw_text[:1000], ai.get("summary", ""),
+                json.dumps(ai.get("categories", [])),
+                ai.get("relevance_score", 0), ai.get("regulatory_type", ""),
+                first_seen, datetime.utcnow().isoformat(), h,
             ))
 
         return found, new
 
     def export_json(self):
-        bills   = [dict(r) for r in self.db.execute("SELECT * FROM bills ORDER BY last_updated DESC")]
-        minutes = [dict(r) for r in self.db.execute("SELECT * FROM board_minutes ORDER BY last_updated DESC")]
-        last_run_row = self.db.execute("SELECT run_date FROM run_log ORDER BY id DESC LIMIT 1").fetchone()
+        bills   = [dict(r) for r in self.db.execute(
+            "SELECT * FROM bills ORDER BY last_updated DESC")]
+        minutes = [dict(r) for r in self.db.execute(
+            "SELECT * FROM board_minutes ORDER BY last_updated DESC")]
+        last_run_row = self.db.execute(
+            "SELECT run_date FROM run_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
 
         for b in bills:
             try:    b["categories"] = json.loads(b["categories"] or "[]")
@@ -472,9 +526,13 @@ class TrackerPipeline:
             "bills":         bills,
             "board_minutes": minutes,
         }
+
         with open(OUTPUT_PATH, "w") as f:
             json.dump(output, f, indent=2, default=str)
-        log.info("Exported tracker_data.json — %d bills, %d minutes", len(bills), len(minutes))
+        log.info(
+            "Exported tracker_data.json — %d bills, %d minutes",
+            len(bills), len(minutes)
+        )
 
     def run(self):
         start = time.time()
@@ -489,13 +547,15 @@ class TrackerPipeline:
             b = bn = m = mn = 0
             try:
                 b, bn = self.process_bills(state_cfg)
-                total_bills += b; total_bills_new += bn
+                total_bills     += b
+                total_bills_new += bn
             except Exception as e:
                 log.error("%s bills error: %s", state, e)
 
             try:
                 m, mn = self.process_minutes(state_cfg)
-                total_min += m; total_min_new += mn
+                total_min     += m
+                total_min_new += mn
             except Exception as e:
                 log.error("%s minutes error: %s", state, e)
 
@@ -508,14 +568,23 @@ class TrackerPipeline:
         duration = time.time() - start
         self.db.execute("""
             INSERT INTO run_log
-            (run_date,bills_found,minutes_found,bills_new,minutes_new,duration_seconds,status)
+            (run_date,bills_found,minutes_found,bills_new,minutes_new,
+             duration_seconds,status)
             VALUES (?,?,?,?,?,?,?)
-        """, (datetime.utcnow().isoformat(), total_bills, total_min,
-              total_bills_new, total_min_new, duration, "success"))
+        """, (
+            datetime.utcnow().isoformat(),
+            total_bills, total_min,
+            total_bills_new, total_min_new,
+            duration, "success",
+        ))
         self.db.commit()
-        log.info("=== Done in %.1fs | Bills: %d (%d new) | Minutes: %d (%d new) ===",
-                 duration, total_bills, total_bills_new, total_min, total_min_new)
+        log.info(
+            "=== Done in %.1fs | Bills: %d (%d new) | Minutes: %d (%d new) ===",
+            duration, total_bills, total_bills_new, total_min, total_min_new,
+        )
 
+
+# ─── Entry Point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     db = init_db()
