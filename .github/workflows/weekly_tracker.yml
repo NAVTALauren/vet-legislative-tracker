@@ -50,6 +50,7 @@ jobs:
 
       - name: Send weekly email digest
         if: ${{ github.event.inputs.send_digest != 'false' }}
+        continue-on-error: true
         env:
           SMTP_HOST: smtp.gmail.com
           SMTP_PORT: "587"
