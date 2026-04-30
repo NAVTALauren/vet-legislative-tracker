@@ -24,7 +24,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 BASE_DIR    = Path(__file__).parent.parent
 CONFIG_PATH = BASE_DIR / "config" / "state_boards.json"
 DB_PATH     = BASE_DIR / "data" / "tracker.db"
-OUTPUT_PATH = BASE_DIR / "frontend" / "public" / "tracker_data.json"
+OUTPUT_PATH = BASE_DIR / "frontend" / "tracker_data.json"
 
 # Create dirs up front
 (BASE_DIR / "data").mkdir(parents=True, exist_ok=True)
